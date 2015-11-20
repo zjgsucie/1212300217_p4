@@ -1,0 +1,320 @@
+kasan
+原文:
+
+Kernel address sanitizer
+================
+
+0. Overview
+===========
+
+Kernel Address sanitizer (KASan) is a dynamic memory error detector. It provides
+a fast and comprehensive solution for finding use-after-free and out-of-bounds
+bugs.
+
+KASan uses compile-time instrumentation for checking every memory access,
+therefore you will need a gcc version of 4.9.2 or later. KASan could detect out
+of bounds accesses to stack or global variables, but only if gcc 5.0 or later was
+used to built the kernel.
+
+Currently KASan is supported only for x86_64 architecture and requires that the
+kernel be built with the SLUB allocator.
+
+1. Usage
+=========
+
+To enable KASAN configure kernel with:
+
+	  CONFIG_KASAN = y
+
+and choose between CONFIG_KASAN_OUTLINE and CONFIG_KASAN_INLINE. Outline/inline
+is compiler instrumentation types. The former produces smaller binary the
+latter is 1.1 - 2 times faster. Inline instrumentation requires a gcc version
+of 5.0 or later.
+
+Currently KASAN works only with the SLUB memory allocator.
+For better bug detection and nicer report, enable CONFIG_STACKTRACE and put
+at least 'slub_debug=U' in the boot cmdline.
+
+To disable instrumentation for specific files or directories, add a line
+similar to the following to the respective kernel Makefile:
+
+        For a single file (e.g. main.o):
+                KASAN_SANITIZE_main.o := n
+
+        For all files in one directory:
+                KASAN_SANITIZE := n
+
+1.1 Error reports
+==========
+
+A typical out of bounds access report looks like this:
+
+==================================================================
+BUG: AddressSanitizer: out of bounds access in kmalloc_oob_right+0x65/0x75 [test_kasan] at addr ffff8800693bc5d3
+Write of size 1 by task modprobe/1689
+=============================================================================
+BUG kmalloc-128 (Not tainted): kasan error
+-----------------------------------------------------------------------------
+
+Disabling lock debugging due to kernel taint
+INFO: Allocated in kmalloc_oob_right+0x3d/0x75 [test_kasan] age=0 cpu=0 pid=1689
+ __slab_alloc+0x4b4/0x4f0
+ kmem_cache_alloc_trace+0x10b/0x190
+ kmalloc_oob_right+0x3d/0x75 [test_kasan]
+ init_module+0x9/0x47 [test_kasan]
+ do_one_initcall+0x99/0x200
+ load_module+0x2cb3/0x3b20
+ SyS_finit_module+0x76/0x80
+ system_call_fastpath+0x12/0x17
+INFO: Slab 0xffffea0001a4ef00 objects=17 used=7 fp=0xffff8800693bd728 flags=0x100000000004080
+INFO: Object 0xffff8800693bc558 @offset=1368 fp=0xffff8800693bc720
+
+Bytes b4 ffff8800693bc548: 00 00 00 00 00 00 00 00 5a 5a 5a 5a 5a 5a 5a 5a  ........ZZZZZZZZ
+Object ffff8800693bc558: 6b 6b 6b 6b 6b 6b 6b 6b 6b 6b 6b 6b 6b 6b 6b 6b  kkkkkkkkkkkkkkkk
+Object ffff8800693bc568: 6b 6b 6b 6b 6b 6b 6b 6b 6b 6b 6b 6b 6b 6b 6b 6b  kkkkkkkkkkkkkkkk
+Object ffff8800693bc578: 6b 6b 6b 6b 6b 6b 6b 6b 6b 6b 6b 6b 6b 6b 6b 6b  kkkkkkkkkkkkkkkk
+Object ffff8800693bc588: 6b 6b 6b 6b 6b 6b 6b 6b 6b 6b 6b 6b 6b 6b 6b 6b  kkkkkkkkkkkkkkkk
+Object ffff8800693bc598: 6b 6b 6b 6b 6b 6b 6b 6b 6b 6b 6b 6b 6b 6b 6b 6b  kkkkkkkkkkkkkkkk
+Object ffff8800693bc5a8: 6b 6b 6b 6b 6b 6b 6b 6b 6b 6b 6b 6b 6b 6b 6b 6b  kkkkkkkkkkkkkkkk
+Object ffff8800693bc5b8: 6b 6b 6b 6b 6b 6b 6b 6b 6b 6b 6b 6b 6b 6b 6b 6b  kkkkkkkkkkkkkkkk
+Object ffff8800693bc5c8: 6b 6b 6b 6b 6b 6b 6b 6b 6b 6b 6b 6b 6b 6b 6b a5  kkkkkkkkkkkkkkk.
+Redzone ffff8800693bc5d8: cc cc cc cc cc cc cc cc                          ........
+Padding ffff8800693bc718: 5a 5a 5a 5a 5a 5a 5a 5a                          ZZZZZZZZ
+CPU: 0 PID: 1689 Comm: modprobe Tainted: G    B          3.18.0-rc1-mm1+ #98
+Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS rel-1.7.5-0-ge51488c-20140602_164612-nilsson.home.kraxel.org 04/01/2014
+ ffff8800693bc000 0000000000000000 ffff8800693bc558 ffff88006923bb78
+ ffffffff81cc68ae 00000000000000f3 ffff88006d407600 ffff88006923bba8
+ ffffffff811fd848 ffff88006d407600 ffffea0001a4ef00 ffff8800693bc558
+Call Trace:
+ [<ffffffff81cc68ae>] dump_stack+0x46/0x58
+ [<ffffffff811fd848>] print_trailer+0xf8/0x160
+ [<ffffffffa00026a7>] ? kmem_cache_oob+0xc3/0xc3 [test_kasan]
+ [<ffffffff811ff0f5>] object_err+0x35/0x40
+ [<ffffffffa0002065>] ? kmalloc_oob_right+0x65/0x75 [test_kasan]
+ [<ffffffff8120b9fa>] kasan_report_error+0x38a/0x3f0
+ [<ffffffff8120a79f>] ? kasan_poison_shadow+0x2f/0x40
+ [<ffffffff8120b344>] ? kasan_unpoison_shadow+0x14/0x40
+ [<ffffffff8120a79f>] ? kasan_poison_shadow+0x2f/0x40
+ [<ffffffffa00026a7>] ? kmem_cache_oob+0xc3/0xc3 [test_kasan]
+ [<ffffffff8120a995>] __asan_store1+0x75/0xb0
+ [<ffffffffa0002601>] ? kmem_cache_oob+0x1d/0xc3 [test_kasan]
+ [<ffffffffa0002065>] ? kmalloc_oob_right+0x65/0x75 [test_kasan]
+ [<ffffffffa0002065>] kmalloc_oob_right+0x65/0x75 [test_kasan]
+ [<ffffffffa00026b0>] init_module+0x9/0x47 [test_kasan]
+ [<ffffffff810002d9>] do_one_initcall+0x99/0x200
+ [<ffffffff811e4e5c>] ? __vunmap+0xec/0x160
+ [<ffffffff81114f63>] load_module+0x2cb3/0x3b20
+ [<ffffffff8110fd70>] ? m_show+0x240/0x240
+ [<ffffffff81115f06>] SyS_finit_module+0x76/0x80
+ [<ffffffff81cd3129>] system_call_fastpath+0x12/0x17
+Memory state around the buggy address:
+ ffff8800693bc300: fc fc fc fc fc fc fc fc fc fc fc fc fc fc fc fc
+ ffff8800693bc380: fc fc 00 00 00 00 00 00 00 00 00 00 00 00 00 fc
+ ffff8800693bc400: fc fc fc fc fc fc fc fc fc fc fc fc fc fc fc fc
+ ffff8800693bc480: fc fc fc fc fc fc fc fc fc fc fc fc fc fc fc fc
+ ffff8800693bc500: fc fc fc fc fc fc fc fc fc fc fc 00 00 00 00 00
+>ffff8800693bc580: 00 00 00 00 00 00 00 00 00 00 03 fc fc fc fc fc
+                                                 ^
+ ffff8800693bc600: fc fc fc fc fc fc fc fc fc fc fc fc fc fc fc fc
+ ffff8800693bc680: fc fc fc fc fc fc fc fc fc fc fc fc fc fc fc fc
+ ffff8800693bc700: fc fc fc fc fb fb fb fb fb fb fb fb fb fb fb fb
+ ffff8800693bc780: fb fb fb fb fb fb fb fb fb fb fb fb fb fb fb fb
+ ffff8800693bc800: fb fb fb fb fb fb fb fb fb fb fb fb fb fb fb fb
+==================================================================
+
+First sections describe slub object where bad access happened.
+See 'SLUB Debug output' section in Documentation/vm/slub.txt for details.
+
+In the last section the report shows memory state around the accessed address.
+Reading this part requires some more understanding of how KASAN works.
+
+Each 8 bytes of memory are encoded in one shadow byte as accessible,
+partially accessible, freed or they can be part of a redzone.
+We use the following encoding for each shadow byte: 0 means that all 8 bytes
+of the corresponding memory region are accessible; number N (1 <= N <= 7) means
+that the first N bytes are accessible, and other (8 - N) bytes are not;
+any negative value indicates that the entire 8-byte word is inaccessible.
+We use different negative values to distinguish between different kinds of
+inaccessible memory like redzones or freed memory (see mm/kasan/kasan.h).
+
+In the report above the arrows point to the shadow byte 03, which means that
+the accessed address is partially accessible.
+
+
+2. Implementation details
+========================
+
+From a high level, our approach to memory error detection is similar to that
+of kmemcheck: use shadow memory to record whether each byte of memory is safe
+to access, and use compile-time instrumentation to check shadow memory on each
+memory access.
+
+AddressSanitizer dedicates 1/8 of kernel memory to its shadow memory
+(e.g. 16TB to cover 128TB on x86_64) and uses direct mapping with a scale and
+offset to translate a memory address to its corresponding shadow address.
+
+Here is the function which translates an address to its corresponding shadow
+address:
+
+static inline void *kasan_mem_to_shadow(const void *addr)
+{
+	return ((unsigned long)addr >> KASAN_SHADOW_SCALE_SHIFT)
+		+ KASAN_SHADOW_OFFSET;
+}
+
+where KASAN_SHADOW_SCALE_SHIFT = 3.
+
+Compile-time instrumentation used for checking memory accesses. Compiler inserts
+function calls (__asan_load*(addr), __asan_store*(addr)) before each memory
+access of size 1, 2, 4, 8 or 16. These functions check whether memory access is
+valid or not by checking corresponding shadow memory.
+
+GCC 5.0 has possibility to perform inline instrumentation. Instead of making
+function calls GCC directly inserts the code to check the shadow memory.
+This option significantly enlarges kernel but it gives x1.1-x2 performance
+boost over outline instrumented kernel.
+
+
+译文：“
+
+Kernel address sanitizer
+================
+
+0．概述
+===========
+
+Kernel address sanitizer（KASan）是一个动态的内存错误检测器。它为寻找使用后自由释放和出界的错误提供快速和全面的解决方案。
+
+KASan使用编译时间编译器来检查每一次内存访问，因此，你需要4.9.2或更高版本的gcc版本。KASan可以检测出界访问的堆栈或全局变量，但前提是内核是使用GCC 5.0或更高版本建立的。
+
+目前KASan只支持x86_64体系，并要求内核与SLUB分配器一同建立的。
+
+1.使用
+=========
+
+使用KASan配置内核：
+
+CONFIG_KASAN = Y
+
+然后在CONFIG_KASAN_OUTLINE和CONFIG_KASAN_INLINE之间进行选择。外围/内联是编译器的两种类型。前者产生较小的二进制位，后者比前者快1.1 - 2倍。内联编译器器仪表需要gcc 5.0或更高的版本。
+
+目前，KASan只能与SLUB内存分配器工作。为了更好的错误检测效果和更好的报告，使CONFIG_STACKTRACE放至少在引导的命令行中加入 'slub_debug = U'。
+
+要在特定文件或目录下禁用编译器，只需添加一行类似于以下命令到相应内核的Makefile中：
+
+        对于一个单一的文件（例如main.o中）：
+                KASAN_SANITIZE_main.o：= n
+
+        对于一个目录中的所有文件：
+                KASAN_SANITIZE：= n
+
+1.1错误报告
+==========
+
+一个典型的出界访问报告如下：
+
+================================================== ================
+BUG：AddressSanitizer：通过kmalloc_oob_right + 0x65 / 0x75 [test_kasan]在地址ffff8800693bc5d3处出界。
+按任务写入大小为1的modprobe/ 1689 
+================================================== ===========================
+BUG的kmalloc-128（未被修改）：KASan错误
+-------------------------------------------------- ---------------------------
+
+由于内核被修改禁用锁调试
+INFO： 在kmalloc_oob_right + 0x3d / 0x75 [test_kasan]age= 0的cpu = 0 PID = 1689
+ __slab_alloc + 0x4b4 / 0x4f0中分配
+ kmem_cache_alloc_trace + 0x10b / 0×190
+ kmalloc_oob_right + 0x3d / 0x75 [test_kasan]
+ 的init_module + 0x9 / 0X47 [test_kasan]
+ do_one_initcall + 0x99 /0x200
+ load_module + 0x2cb3 / 0x3b20
+ SyS_finit_module + 0x76 / 0x80的
+ system_call_fastpath + 0×12 / 0x17
+INFO：slab 0xffffea0001a4ef00 objects = 17 used= 7 fp = 0xffff8800693bd728 flags= 0x100000000004080
+INFO：Object 0xffff8800693bc558 @offset= 1368 fp = 0xffff8800693bc720
+
+Bytes b4 f​​fff8800693bc548：00 00 00 00 00 00 00 00 5A 5A 5A 5A 5A 5A 5A 5A ........ ZZZZZZZZ
+Object ffff8800693bc558：6B 6B 6B 6B 6B 6B 6B 6B 6B 6B 6B 6B 6B 6B 6B 6B kkkkkkkkkkkkkkkk
+Object ffff8800693bc568：6B 6B 6B 6B 6B 6B 6B 6B 6B 6B 6B 6B 6B 6B 6B 6B kkkkkkkkkkkkkkkk
+Object ffff8800693bc578：6B 6B 6B 6B 6B 6B 6B 6B 6B 6B 6B 6B 6B 6B 6B 6B kkkkkkkkkkkkkkkk
+Object ffff8800693bc588：6B 6B 6B 6B 6B 6B 6B 6B 6B 6B 6B 6B 6B 6B 6B 6B kkkkkkkkkkkkkkkk
+Object ffff8800693bc598：6B 6B 6B 6B 6B 6B 6B 6B 6B 6B 6B 6B 6B 6B 6B 6B kkkkkkkkkkkkkkkk
+Object ffff8800693bc5a8：6B 6B 6B 6B 6B 6B 6B 6B 6B 6B 6B 6B 6B 6B 6B 6B kkkkkkkkkkkkkkkk
+Object ffff8800693bc5b8：6B 6B 6B 6B 6B 6B 6B 6B 6B 6B 6B 6B 6B 6B 6B 6B kkkkkkkkkkkkkkkk
+Object ffff8800693bc5c8：6B 6B 6B 6B 6B 6B 6B 6B 6B 6B 6B 6B 6B 6B 6B A5 kkkkkkkkkkkkkkk。
+Redzone ffff8800693bc5d8：CC CC CC CC CC CC CC CC ........
+Padding ffff8800693bc718：5A 5A 5A 5A 5A 5A 5A 5A ZZZZZZZZ
+CPU：0 PID：1689 Comm：modprobe  被修改：G  B 3.18.0-RC1-MM1 +＃98
+Hardware name：QEMU Standard PC（i440FX + PIIX，1996），BIOS rel-1.7.5-0-ge51488c-20140602_164612-nilsson.home.kraxel.org  04/01/2014
+ ffff8800693bc000 0000000000000000 ffff8800693bc558 ffff88006923bb78
+ ffffffff81cc68ae 00000000000000f3 ffff88006d407600 ffff88006923bba8
+ ffffffff811fd848 ffff88006d407600 ffffea0001a4ef00 ffff8800693bc558
+调用追踪：
+ [<ffffffff81cc68ae>] dump_stack + 0×46 /0x58
+ [<ffffffff811fd848>] print_trailer + 0xF8时/ 0x160
+ [<ffffffffa00026a7>]？ kmem_cache_oob + 0xc3 / 0xc3 [test_kasan]
+ [<ffffffff811ff0f5>] object_err + 0x35 / 0X40
+ [<ffffffffa0002065>]？ kmalloc_oob_right + 0x65 / 0x75 [test_kasan]
+ [<ffffffff8120b9fa>] kasan_report_error + 0x38a / 0x3f0
+ [<ffffffff8120a79f>]？ kasan_poison_shadow +为0x2F / 0X40
+ [<ffffffff8120b344>]？ kasan_unpoison_shadow + 0×14 / 0X40
+ [<ffffffff8120a79f>]？ kasan_poison_shadow +为0x2F / 0X40
+ [<ffffffffa00026a7>]？ kmem_cache_oob + 0xc3 / 0xc3 [test_kasan]
+ [<ffffffff8120a995>] __asan_store1 + 0x75 / 0XB0
+ [<ffffffffa0002601>]？ kmem_cache_oob + 0x1d / 0xc3 [test_kasan]
+ [<ffffffffa0002065>]？ kmalloc_oob_right + 0x65 / 0x75 [test_kasan]
+ [<ffffffffa0002065>] kmalloc_oob_right + 0x65 / 0x75 [test_kasan]
+ [<ffffffffa00026b0>]的init_module + 0x9 / 0X47 [test_kasan]
+ [<ffffffff810002d9>] do_one_initcall + 0x99 /0x200
+ [<ffffffff811e4e5c>]？ __vunmap + 0xec / 0x160
+ [<ffffffff81114f63>] load_module + 0x2cb3 / 0x3b20
+ [<ffffffff8110fd70>]？ m_show + 0x240 / 0x240
+ [<ffffffff81115f06>] SyS_finit_module + 0x76 / 0x80
+ [<ffffffff81cd3129>] system_call_fastpath + 0×12 / 0x17
+错误地址周围的内存状态：
+ ffff8800693bc300：fc fc fc fc fc fc fc fc fc fc fc fc fc fc fc fc
+ ffff8800693bc380：fc fc 00 00 00 00 00 00 00 00 00 00 00 00 00 fc
+ ffff8800693bc400：fc fc fc fc fc fc fc fc fc fc fc fc fc fc fc fc
+ ffff8800693bc480：fc fc fc fc fc fc fc fc fc fc fc fc fc fc fc fc
+ ffff8800693bc500：fc fc fc fc fc fc fc fc fc fc fc 00 00 00 00 00
+ffff8800693bc580：00 00 00 00 00 00 00 00 00 00 03 fc fc fc fc fc
+                                                 
+ ffff8800693bc600：fc fc fc fc fc fc fc fc fc fc fc fc fc fc fc fc
+ ffff8800693bc680：fc fc fc fc fc fc fc fc fc fc fc fc fc fc fc fc
+ ffff8800693bc700：fc fc fc fc fb fb fb fb fb fb fb fb fb fb fb fb
+ ffff8800693bc780：fb fb fb fb fb fb fb fb fb fb fb fb fb fb fb fb
+ ffff8800693bc800：fb fb fb fb fb fb fb fb fb fb fb fb fb fb fb fb
+================================================== ================
+
+第一部分在坏的访问发生处描述了slub对象。见“SLUB Debug输出”的Documentation/vm/slub.txt的细节部分。
+
+在最后一部分的报告显示，各访问地址的存储状态。阅读这部分内容需要更多地了解KASan是如何工作的。
+
+每8个字节的内存编码为一个阴影字节，它可被访问，部分访问，释放，也可以是一个redzone后面的一部分。
+我们为下面的每个阴影字节编码：0意味着所有的8个字节相应的存储区域的可被访问;数N（1 <= N <= 7）意味着第一N个字节可被访问，其余（8 - N）个字节都不可被访问;任何负值表明整个8个字节的字是不可访问的。我们使用不同的负值区分不同种的不可访问的内存空间，就像是redzones或被释放的内存一样（见mm/kasan/kasan.h）。
+
+另外，在上述的报告中指针箭头指向了阴影字节03，这意味着它所访问的地址是部分被访问。
+
+
+2.运行细节
+========================
+
+从一个高的水平，我们对存储器错误检测方法是类似于kmemcheck的：使用阴影内存来记录每个内存字节是否能够安全访问并且使用编译器来检查阴影内存的每次存储器存取。
+
+AddressSanitizer致力于内核内存的1/8映射到它的阴影内存
+（如16TB覆盖在x86_64上的128TB），并使用一定比例和偏移地址转换成内存地址并直接映射到其相应的阴影地址上。
+这里是翻译地址到其对应的阴影地址的一个函数：
+
+static inline void *kasan_mem_to_shadow(const void *addr)
+{
+	return ((unsigned long)addr >> KASAN_SHADOW_SCALE_SHIFT)
+		+ KASAN_SHADOW_OFFSET;
+}
+
+where KASAN_SHADOW_SCALE_SHIFT = 3.
+
+编译时用来检查内存访问的仪器。编译器在每次内存访问（大小是1，2，4，8或16）之前插入函数调用(__asan_load*(addr), __asan_store*(addr))
+这些函数通过检查相应的阴影存储器来检查内存访问是否有效。
+
+GCC 5.0有可能执行内嵌的编译器。而不是让函数直接调用GCC输入入检查阴影内存的代码。
+此选项显著扩大了内核，但它内核在运行外围编译器时提升了1.1-2倍的性能。
